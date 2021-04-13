@@ -234,3 +234,314 @@ echo "This is a simple test and of course it is not an application!!!" > html/in
 docker image build --file Dockerfile.application -t templated:development --build-arg ENVIRONMENT=development --label lab=lab4 .
 docker image build --file Dockerfile.application -t templated:production --build-arg ENVIRONMENT=production --label lab=lab4 .
 ```
+
+##### DOCKER host resources 
+--cpuset-cpus can be used for how many cpu to use.
+--cpu-quota limiter for cpu
+--cpu-shares cpu cycles will be shared but the default value would be 1024
+-cpus = 1.5 will guarantee half of the cpu resources to the container
+--memory , we can disable oom-killer using --oom-kill-disable 
+--memory-reservation : threshold 
+```
+docker stats --all --format "table [{{.Container}}] {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}"
+docker container top webserver
+```
+>Converting container into images
+
+```
+commit
+export --output or -o for output file 
+docker container diff webserver
+```
+>Formatting and filtering 
+
+--no-trunc to disable the truncation, --format='{{json .}} , 
+```
+'{{json .Mounts}}' or '{{split .Image ":"}}'
+'{{title .Name}}' || can use lower or upper or title
+'{{range <JSON keys> }}{{end}}' define range 
+docker container ls --all --format "table {{.Names}}: {{.Image}} {{.Command}}" --no-trunc
+docker container ls --all --format='{{json .}}')
+```
+##### Manging devices 
+You can give sound to the dockercontainer 
+```
+docker run -ti --cap-add SYS_ADMIN --device /dev/mapper/centosroot:/dev/sdx centos
+docker container run -ti --device /dev/snd alpine
+docker container --help
+
+```
+##### Executing containers
+
+we are renaming docker, if we forgot to give it a name 
+```
+docker container run -ti -d alpine
+docker container rename $(docker container ls -ql) myalpineshell\
+docker container attach myalpineshell ## will attach terminal to running shell
+docker container ls --all --filter name=myalpineshell --filter name=secondshell
+docker container start -a -i myalpineshell
+docker container exec -ti myalpineshell sh
+docker container ls --all --filter name=myalpineshell
+
+```
+#####  limiting container resources 
+```
+docker container stats ## below image is for stress testing only dont use it for fun
+docker container run --memoryreservation=250m --name 2GBreserved -d frjaraur/stress-ng:alpine --vm 2 -vm-bytes 1024M
+docker container rm -f 2GBlimited ## to remove limited
+docker container run -d --cpus=1 --name CPU2vs1 frjaraur/stress-ng:alpine --cpu 2 --timeout 120 ## CPU
+```
+
+##### formating and filtering container list output 
+
+```
+docker run -d --name web1 --label stage=production nginx:alpine
+docker run -d --name web2 --label stage=development nginx:alpine
+docker run -d --name web3 --label stage=development nginx:alpine
+docker container ls --format "table {{.Names}} {{.Command}}\\t{{.Labels}}" ## labels will help u find which container belongs to stages 
+docker container ls --format "table {{.Names}} {{.Command}}\\t{{.Labels}}" --filter label=stage=development
+docker container kill $(docker container ls --format "{{.ID}}" --filter label=stage=development)
+docker container ls --format "table {{.Names}}\\t{{.Labels}}"
+```
+
+#### Docker container networking 
+
+```
+FROM alpine:3.10
+RUN set -ex; \
+postgresHome="$(getent passwd postgres)"; \
+postgresHome="$(echo "$postgresHome" | cut -d: -f6)"; \
+[ "$postgresHome" = '/var/lib/postgresql' ]; \
+mkdir -p "$postgresHome"; \
+chown -R postgres:postgres "$postgresHome"
+...
+...
+RUN mkdir -p /var/run/postgresql && chown -R postgres:postgres /var/run/postgresql && chmod 2777 /var/run/postgresql
+ENV PGDATA /var/lib/postgresql/data
+RUN mkdir -p "$PGDATA" && chown -R postgres:postgres "$PGDATA" && chmod 777 "$PGDATA"
+VOLUME /var/lib/postgresql/data
+COPY docker-entrypoint.sh /usr/local/bin/
+ENTRYPOINT ["docker-entrypoint.sh"]
+EXPOSE 5432
+CMD ["postgres"]
+```
+There are many types of volume storage:
+Unamed volumes - its hard to track them on local as they are unnamed, this will grow in docker data root path. 
+Named valued - the volumes can be used with volume set to a driver or NFS for example.
+Localhost directories or files - any special file or directories in your local be set too.
+
+```
+create - can create a volume (docker volume create or --opt or -o to add options for drivers)
+docker volume inspect 
+docker volume ls
+docker volume prune
+docker volume rm 
+docker image inspect postgres:alpine --format "{{ .Config.Volumes }} " map[/var/lib/postgresql/data:{}]
+docker container run -d --name mydb postgres:alpine
+
+### this is the directory volume which we can bypass it to by pass CoW, making it to allow R/W/Modify content in the /var/lib/postgresql/data direcotry.
+
+docker container inspect mydb --format "{{ .Mounts }} " [{volume c888a831d6819aea6c6b4474f53b7d6c60e085efaa30d17db60334522281d76f /var/lib/docker/volumes/c888a831d6819aea6c6b4474f53b7d6c60e085efaa30d17db60334522281d76f/_data/var/lib/postgresql/data local true }]
+
+docker volume inspect c888a831d6819aea6c6b4474f53b7d6c60e085efaa30d17db60334522281d76f 
+## this will show us that it has been mounted, and we can access the data locally.
+docker volume ls --filter name=c888a831d6819aea6c6b4474f53b7d6c60e085efaa30d17db60334522281d76f
+## lets remove and align this to a new container -- attaching the volume
+ocker container stop mydb
+docker container rm mydb
+docker volume rm c888a831d6819aea6c6b4474f53b7d6c60e085efaa30d17db60334522281d76f
+### creating new my data to map it to volume : dir or file 
+docker volume create mydata
+docker container run --name c1 -v mydata:/data -ti alpine
+docker container run --name c2 -v mydata:/tmp -ti alpine ls -lart /tmp
+docker volume rm mydata
+docker container rm c1 c2
+docker volume rm mydata
+
+```
+
+
+##### Networking in containers 
+```
+docker network ls 
+> --attachable : option enables container attachement 
+> --aux-address : add host and its address to this n\w ie: --auxaddress="mygateway=192.168.1.10"
+> --config-from and --config-only : useful for building configurations using automation tools
+> --driver or -d and --opt : By default, we can only use macvlan, none, host, and bridge.
+> --gateway : overwrite the default gateway.
+> --ingress : internal service management.
+> --internal : on overlay networks, will be attached to the docker_gwbridge bridge network.
+> --ip-range : range of IP addresses for containers
+> --ipam-driver : external IP address management
+> --ipv6 : We will use this option to enable IPv6 on this network.
+> --label :  we can add metadata information to networks for better filtering
+> --scope : scope of operation is it in local or swarm
+> --subnet : CIDR format that represents a network segment.
+Docker manipulates the iptables rules for you every time a network is created or some connection.
+recommend allowing the Docker daemon to manage these rules for you.
+```
+
+##### default bridge network
+
+bridge is the default network type for all containers.
+others can be declared on container creation or exection by using --network.
+
+```
+docker container run -ti -d --name c1 alpine ping 8.8.8.8
+docker container run -ti -d --name c2 alpine ping 8.8.8.8
+docker container inspect c1 --format "{{ .NetworkSettings.Networks.bridge.IPAddress }}"
+docker container inspect c2 --format "{{ .NetworkSettings.Networks.bridge.IPAddress }}"
+docker container inspect c1 --format "{{json .NetworkSettings.Networks }}"
+## when u get the output by default it would be using bridge not ipv6
+## containers created subnet 172.17.0.0/16 all containers will get IP from this segement 
+## gateway default would be 172.17.0.1 
+## containers will have virtual mac addresses , ip address 
+
+
+``` 
+##### Null networks
+```
+docker run -ti --network none alpine 
+ip add
+## c
+reating null will only have access to its required resources, by default bridge n/w specifies none
+
+#####Host network
+
+docker run -ti --network host alpine 
+## container is using namespace called host which can be directly talk to local interface which is risky you can create your own custom bridge 
+> custom bridge: - isolation : with iptables
+> internal DNS : --link functionality 
+> On-the-fly container attachment: network bridge or custom can be attached even if we create a null network container.
+### Creating a custom network for understanding 
+docker network create --driver bridge --internal --subnet 192.168.30.0/24 --label internal-only internal-only
+docker network inspect internal-only
+docker container run --network internal-only -ti --name intc1 alpine sh
+ping intc1 -c2
+docker container run --network internal-only -ti --name intc2 alpine sh
+
+## run this is local docker machine iptables -L to see the docker rules
+```
+
+##### Network / external world
+--ip-forward=false : Ip forwarding for containers can be done at kernal level. 
+iptables : will run rules , instead of allowing dockerd to take care. --iptables=false 
+DOCKER and DOCKER-ISOLATION , DOCKER-USER chain. 
+
+##### inter-container communication 
+this can be done b inter-container communication with ip forwarding and iptables , --internal network creation. --icc=false inter-container communication is off. most secure network connection can be done by --link . 
+
+##### DNS on custom bridge networks
+ custom bridge allows internal DNS to communicate. 127.0.0.11. which can be modified.
+ ```
+ --network-alias=ALIAS : add name to a container internal DNS
+ --link=CONTAINER_NAME:ALIAS  : This use case is different to --network-alias,internal DNS to allow  the resolution of CONTAINER_NAME
+--dns, --dns-search, and --dns-option : manage forwarded DNS resolution,can add a forwarder DNS
+#### publishing applications = exposing imags 
+docker container run -d --name webserver nginx:alpine
+docker container inspect webserver --format "{{json .NetworkSettings.Networks.bridge.IPAddress }}"
+#172.17.0.1 in this case, and we can reach container port 80
+--publish or -p  [HOST_IP:][HOST_PORT:]CONTAINER_PORT[/PROTOCOL] TCP
+declare a range of ports in the form --publish StartPort-EndPort[/PROTOCOL]
+
+docker container run -d --name public-webserver --publish 80 nginx:alpine
+docker container ls --filter name=public-webserver
+### requirements.txt should contain python
+### Excerise 
+FROM python:alpine
+WORKDIR /app
+COPY ./requirements.txt requirements.txt
+RUN pip install -r requirements.txt
+COPY app.py .
+COPY templates templates
+EXPOSE 5000
+CMD ["python", "app.py"]
+
+
+docker image build -q -t simpleapp:v1.0
+docker container run -d --name v1.0 simpleapp:v1.0
+docker container ls --filter name=v1.0
+docker container inspect v1.0 --format "{{.NetworkSettings.Networks.bridge.IPAddress }}"
+### binding it with volume so we could modify html file 
+docker container run -d --name v1.0-bindmount -v $(pwd)/templates:/app/templates simpleapp:v1.0
+docker container inspect v1.0-bindmount --format "{{.NetworkSettings.Networks.bridge.IPAddress }}"
+
+
+#####Mounting SSHFS PLUGIN
+docker plugin install vieux/sshfs
+#plugin used for sshfileshare
+# just give enter and Y
+sudo systemctl status ssh
+docker plugin ls
+docker volume create -d vieux/sshfs -o sshcmd=ssh_user@127.0.0.1:/tmp -o password=ssh_userpasswd \ sshvolume
+docker container run --rm -it -v sshvolume:/data alpine sh
+
+``` 
+#### multi homed containers 
+```
+docker network create zone-a
+docker network create zone-b
+docker container run -d --name cont1 --network zone-a alpine sleep 3000
+docker network connect zone-b cont1
+docker container run -d --name cont1 --network zone-b alpine sleep 3000
+docker exec cont1 ip add
+##shows subnets of zoneb
+docker container run -d --name cont2 --network zone-b --cap-add NET_ADMIN alpine sleep 3000
+we can run 2 containers with 1 interface 
+docker container run -d --name cont3 --network zone-a --cap-add NET_ADMIN alpine sleep 3000
+docker exec cont2 ip route
+## 172.20.0.0/16 dev eth0 scope link src 172.20.0.3
+docker exec cont3 ip route
+## 172.19.0.0/16 dev eth0 scope link src 172.19.0.3
+## if we want cont2 - cont 3 to communicate we have to add route via cont1 
+docker exec cont2 route add -net 172.19.0.0
+docker exec cont2 ip route
+docker exec cont3 route add -net 172.20.0.0
+##172.19.0.0/24 via 172.20.0.2 dev eth0
+##172.20.0.0/16 dev eth0 scope link src 172.20.0.3
+docker exec cont3 ip route
+##172.19.0.0/16 dev eth0 scope link src 172.19.0.3
+##172.20.0.0/24 via 172.19.0.2 dev eth0
+
+docker exec cont3 ping -c 3 cont2
+##FAILS bcz of name resolution fail foor cont2
+
+
+docker exec cont3 ping -c 3 cont1
+#PING cont1 (172.19.0.2): 56 data bytes
+docker exec cont3 ping -c 3 172.20.0.3
+
+
+```
+##### Publishing applications 
+creating a simple 3 layer application , where 2 layer application of load balancer.
+```
+docker network create simplenet
+docker container run -d  --name simpledb --network simplenet --env "POSTGRES_PASSWORD=changeme" 
+codegazers/simplestlab:simpledb
+docker container run -d \
+--name simpleapp --network simplenet --env dbhost=simpledb --env dbname=demo \
+--env dbuser=demo --env dbpasswd=d3m0 codegazers/simplestlab:simpleapp
+
+docker network inspect simplenet --format "{{range .Containers}} {{.IPv4Address }} {{.Name}} {{end}}"
+docker inspect codegazers/simplestlab:simpledb --format "{{json .Config.ExposedPorts }}"
+docker inspect codegazers/simplestlab:simpleapp --format "{{json .Config.ExposedPorts }}"
+
+## Creating loadbalance after db and app 
+docker container run -d \
+--name simplelb --env APPLICATION_ALIAS=simpleapp --env APPLICATION_PORT=3000 \
+--network simplenet --publish 8080:80 codegazers/simplestlab:simplelb
+## run local iptables to check 
+sudo iptables -L DOCKER -t nat --linenumbers --numeric
+
+
+##### Using Docker Compose to deploy multiple container 
+
+
+
+
+
+
+
+
+
